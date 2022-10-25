@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "thread": "cpp",
+        "*.tcc": "cpp",
+        "string": "cpp",
+        "string_view": "cpp",
+        "iomanip": "cpp",
+        "ostream": "cpp",
+        "sstream": "cpp",
+        "*.tpp": "cpp",
+        "cmath": "cpp",
+        "cstring": "cpp"
+    }
+}
