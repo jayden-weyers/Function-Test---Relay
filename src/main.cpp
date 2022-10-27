@@ -5,17 +5,15 @@
 #include <stdio.h>
 #include <SoftwareSerial.h>
 #include <TinyGsmClient.h>
-#include <Ticker.h>
 #include <esp_now.h>
 #include <WiFi.h>
-#include <EEPROM.h>
+//#include <EEPROM.h>
 #include <StreamDebugger.h>
-#include <DNSServer.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <WebSerial.h>
 
-#define EEPROM_SIZE 16
+//#define EEPROM_SIZE 16
 #define SerialAT Serial1
 #define uS_TO_S_FACTOR      1000000ULL  // Conversion factor for micro seconds to seconds
 #define TIME_TO_SLEEP       60          // Time ESP32 will go to sleep (in seconds)
@@ -738,5 +736,7 @@ void recvMsg(uint8_t *data, size_t len){
     WebSerial.println("Req Time:           " + String(reqTimer));
     WebSerial.println("Uptime:              " + String(upTimer));
     WebSerial.println("--------------------------------");
+    free(reqTimer);
+    free(upTimer);
   }
 }
