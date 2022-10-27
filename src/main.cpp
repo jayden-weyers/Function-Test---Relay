@@ -31,7 +31,11 @@
 const char* sentinels[] = {"9C9C1F18785C",    //A1
                            "246F2845E704"};   //A2
 
+String Ssentinels[] = {"9C:9C:1F:18:78:5C",
+                       "24:6F:28:45:E7:04"};
+
 char networking[14][20] = {"", "", "", "", "", "", "", "", "", "", "", "", "", ""};
+char reqResponse[][10] =  {"", "", ""};
 
 SoftwareSerial monitor(14, 15);
 
@@ -48,15 +52,20 @@ String subResponse = "";
 String ip_address = "";
 String webinfo = "";
 int ipnum = 1;
-int netRetry = 1;
+int netRetry = 0;
 int requestNum = 0;
+int reqReset = 0;
 
-uint8_t address[][6] = {{0xAC, 0x0B, 0xFB, 0xDD ,0x1A, 0xF5},   //A1
-                        {0xAC, 0x0B, 0xFB, 0xDC, 0xAF, 0xD4},   //A2
+uint8_t address[][6] = {//{0xAC, 0x0B, 0xFB, 0xDD ,0x1A, 0xF5},   //A1
+                        //{0xAC, 0x0B, 0xFB, 0xDC, 0xAF, 0xD4},   //A2
+                        {0x2C, 0xF4, 0x32, 0x4B, 0x2B, 0xCA},
+                        {0xDC, 0x4F, 0x22, 0x78, 0xAD, 0xE9},
                         {0x48, 0x55, 0x19, 0x16, 0x08, 0xE8}};  //SELF
 
-String Saddress[] = {"AC:0B:FB:DD:1A:F5",
-                     "AC:0B:FB:DC:AF:D4",
+String Saddress[] = {//"AC:0B:FB:DD:1A:F5",
+                     //"AC:0B:FB:DC:AF:D4",
+                     "2C:F4:32:4B:2B:CA",
+                     "DC:4F:22:78:AD:E9",
                      "48:55:19:16:08:E8"};
 
 typedef struct message {
@@ -72,6 +81,7 @@ int retry = 3;
 volatile bool sendStatus = true;
 
 unsigned long timer = 0;
+unsigned long reqTime = 0;
 bool waiting = false;
 
 int counter, lastIndex, numberOfPieces = 24;
@@ -195,10 +205,17 @@ void loop(){
   if (millis()-timer > 60000){
     WebSerial.println("");
     monitor_debug.println();
-    if (modemConnect() != 1){
-      timer = millis();
-      waiting = false;
-      return;
+    switch(modemConnect())
+    {
+      case 2:
+        timer = 0;
+        break;
+      case 0:
+        timer = millis();
+        waiting = false;
+        break;
+      default:
+        break;
     }
     retry = 3;
     while (state){
@@ -390,11 +407,10 @@ int modemConnect(){
         WebSerial.println("Failed to connect, restarting modem");
         netRetry++;
         modemRestart();
-        delay(5000);
+        delay(10000);
         if (!modem.init())
           ESP.restart();
         modemConfigure();
-        timer = 0;
         return 2;
       }
       monitor_debug.printf("Failed to connect, retrying %d times\n\r", i-1);
@@ -432,9 +448,10 @@ int modemConnect(){
       monitor_debug.println("Connecting to: " + String(apn));
       WebSerial.print("Connecting to: ");
       WebSerial.println(apn);
-      if (!modem.gprsConnect(apn, gprsUser, gprsPass))
+      if (!modem.gprsConnect(apn, gprsUser, gprsPass)){
         monitor_debug.println("Failed to connect to GPRS.");
         WebSerial.println("Failed to connect to GPRS");
+      }
   }
 
   String ccid = modem.getSimCCID();
@@ -581,8 +598,24 @@ int httpRequest(){
     if (SerialAT.available()){
       response = SerialAT.readString();
       if (strstr(response.c_str(), "+HTTPACTION") != NULL){
-        if (strstr(response.c_str(), ",200,") != NULL)
+        String responseTemp = response;
+        responseTemp.replace(GSM_NL, "");
+        responseTemp = responseTemp.substring(13);
+        char responseInfo[50] = "";
+        strcpy(responseInfo, responseTemp.c_str());
+        char* resToken = strtok(responseInfo, ",");
+        int resTokenCount = 0;
+        while (resToken != NULL){
+          strcpy(reqResponse[resTokenCount], resToken);
+          resToken = strtok(NULL, ",");
+          resTokenCount++;
+        }
+        if (strcmp(reqResponse[1], "200") == 0){
+          if (strcmp(reqResponse[2], "1") != 0)
+            reqReset++;
           requestNum++;
+          reqTime = millis();
+        }
         monitor_debug.println("GET request successful");
         WebSerial.println("GET request successful");
         monitor_debug.println(response);
@@ -684,18 +717,26 @@ void recvMsg(uint8_t *data, size_t len){
     if(esp_now_send(address[1], (uint8_t *)&myData, sizeof(myData)) != ESP_OK)
       WebSerial.println("Failed to reach: " + Saddress[1]);
   }
-  else if (strstr(d.c_str(), "IP") != NULL)
-    WebSerial.println("\n\rNumber of IP's: " + String(ipnum));
-  else if (strstr(d.c_str(), "Retry") != NULL)
-    WebSerial.println("\n\rReconnects: " + String(netRetry));
-  else if (strstr(d.c_str(), "Request") != NULL)
-    WebSerial.println("\n\rTotal Requests: " + String(requestNum));
-  else if (strstr(d.c_str(), "Uptime") != NULL){
+  else if (strstr(d.c_str(), "Stats") != NULL) {
     unsigned long uptime = millis();
-    int secs = uptime / 1000;
-    int mins = secs / 60;
-    int hours = secs / 3600;
-    int days = secs / 86400;
-    WebSerial.println("\n\rUptime: " + String(days) + ":" + String(hours % 24) + ":" + String(mins % 60) + ":" + String(secs % 60));
+    unsigned long requestTimer = uptime - reqTime;
+    char *reqTimer = (char*)malloc(13 * sizeof(char)); // DDD:HH:MM:SS
+    char *upTimer  = (char*)malloc(13 * sizeof(char)); // DDD:HH:MM:SS
+    sprintf(reqTimer, "%03d:%02d:%02d:%02d", requestTimer / 86400000, (requestTimer / 3600000) % 24, (requestTimer / 60000) % 60, (requestTimer / 1000) % 60);
+    sprintf(upTimer, "%03d:%02d:%02d:%02d", uptime / 86400000, (uptime / 3600000) % 24, (uptime / 60000) % 60, (uptime / 1000) % 60);
+    WebSerial.println("\r\n--------------------------------");
+    WebSerial.println("Relay 1:   " + Saddress[0]);
+    WebSerial.println("Sentinel: " + Ssentinels[0]);
+    WebSerial.println("--------------------------------");
+    WebSerial.println("Relay 2:  " + Saddress[1]);
+    WebSerial.println("Sentinel: " + Ssentinels[1]);
+    WebSerial.println("--------------------------------");
+    WebSerial.println("Number of IP's:   " + String(ipnum));
+    WebSerial.println("Reconnects:        " + String(netRetry));
+    WebSerial.println("Total Requests:    " + String(requestNum));
+    WebSerial.println("Request Resets:   " + String(reqReset));
+    WebSerial.println("Req Time:           " + String(reqTimer));
+    WebSerial.println("Uptime:              " + String(upTimer));
+    WebSerial.println("--------------------------------");
   }
 }
