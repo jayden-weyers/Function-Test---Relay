@@ -9,6 +9,8 @@
         "sstream": "cpp",
         "*.tpp": "cpp",
         "cmath": "cpp",
-        "cstring": "cpp"
+        "cstring": "cpp",
+        "regex": "cpp",
+        "typeinfo": "cpp"
     }
 }

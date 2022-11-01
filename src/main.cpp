@@ -7,13 +7,12 @@
 #include <TinyGsmClient.h>
 #include <esp_now.h>
 #include <WiFi.h>
-//#include <EEPROM.h>
 #include <StreamDebugger.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <WebSerial.h>
+#include <Preferences.h>
 
-//#define EEPROM_SIZE 16
 #define SerialAT Serial1
 #define uS_TO_S_FACTOR      1000000ULL  // Conversion factor for micro seconds to seconds
 #define TIME_TO_SLEEP       60          // Time ESP32 will go to sleep (in seconds)
@@ -26,11 +25,13 @@
 
 #define GSM_PIN ""
 
-const char* sentinels[] = {"9C9C1F18785C",    //A1
-                           "246F2845E704"};   //A2
+Preferences prefs;
 
-String Ssentinels[] = {"9C:9C:1F:18:78:5C",
-                       "24:6F:28:45:E7:04"};
+char sentinels[][20] = {"00:00:00:00:00:00",    //A1
+                        "00:00:00:00:00:01"};   //A2
+
+String Ssentinels[] = {"00:00:00:00:00:00",
+                       "00:00:00:00:00:01"};
 
 char networking[14][20] = {"", "", "", "", "", "", "", "", "", "", "", "", "", ""};
 char reqResponse[][10] =  {"", "", ""};
@@ -54,17 +55,13 @@ int netRetry = 0;
 int requestNum = 0;
 int reqReset = 0;
 
-uint8_t address[][6] = {//{0xAC, 0x0B, 0xFB, 0xDD ,0x1A, 0xF5},   //A1
-                        //{0xAC, 0x0B, 0xFB, 0xDC, 0xAF, 0xD4},   //A2
-                        {0x2C, 0xF4, 0x32, 0x4B, 0x2B, 0xCA},
-                        {0xDC, 0x4F, 0x22, 0x78, 0xAD, 0xE9},
-                        {0x48, 0x55, 0x19, 0x16, 0x08, 0xE8}};  //SELF
+uint8_t address[][6] = {{0, 0, 0, 0, 0, 0},   //A1
+                        {0, 0, 0, 0, 0, 1},   //A2
+                        {0, 0, 0, 0, 0, 2}};  //SELF
 
-String Saddress[] = {//"AC:0B:FB:DD:1A:F5",
-                     //"AC:0B:FB:DC:AF:D4",
-                     "2C:F4:32:4B:2B:CA",
-                     "DC:4F:22:78:AD:E9",
-                     "48:55:19:16:08:E8"};
+String Saddress[] = {"00:00:00:00:00:00",
+                     "00:00:00:00:00:01",
+                     "00:00:00:00:00:02"};
 
 typedef struct message {
   int x;
@@ -81,6 +78,9 @@ volatile bool sendStatus = true;
 unsigned long timer = 0;
 unsigned long reqTime = 0;
 bool waiting = false;
+
+volatile bool scanState = false;
+volatile bool updateData = false;
 
 int counter, lastIndex, numberOfPieces = 24;
 String pieces[24], input;
@@ -141,6 +141,70 @@ void setup(){
   myData.y = 10;
 
   esp_now_register_send_cb(OnDataSent);
+
+  String stringTest;
+  int bufferTest;
+
+  prefs.begin("Data", false);
+  stringTest = prefs.getString("Sen1", "test");
+  if (stringTest.compareTo("test") == 0){
+    prefs.putString("Sen1", Ssentinels[0]);
+  }
+  else {
+    strcpy(sentinels[0], stringTest.c_str());
+    Ssentinels[0] = stringTest;
+  }
+
+  stringTest = prefs.getString("Sen2", "test");
+  if (stringTest.compareTo("test") == 0){
+    prefs.putString("Sen2", Ssentinels[1]);
+  }
+  else {
+    strcpy(sentinels[1], stringTest.c_str());
+    Ssentinels[1] = stringTest;
+  }
+
+  bufferTest = prefs.getBytesLength("Rel1");
+  monitor_debug.printf("\n\rRel1 buffer length: %d\n\r", bufferTest);
+  if (bufferTest != 0){
+    prefs.getBytes("Rel1", address[0], 6);
+  }
+  else {
+    prefs.putBytes("Rel1", address[0], 6);
+  }
+
+  bufferTest = prefs.getBytesLength("Rel2");
+  monitor_debug.printf("\n\rRel2 buffer length: %d\n\r", bufferTest);
+  if (bufferTest != 0){
+    prefs.getBytes("Rel2", address[1], 6);
+  }
+  else {
+    prefs.putBytes("Rel2", address[1], 6);
+  }
+
+  prefs.end();
+
+  String relTemp = "";
+  char buffer[10] = "";
+
+  for (int i = 0; i < 6; i++){
+    itoa(address[0][i], buffer, 16);
+    relTemp.concat(buffer);
+    if (i < 5)
+      relTemp.concat(":");
+  }
+  relTemp.toUpperCase();
+  Saddress[0] = relTemp;
+
+  relTemp = "";
+  for (int i = 0; i < 6; i++){
+    itoa(address[1][i], buffer, 16);
+    relTemp.concat(buffer);
+    if (i < 5)
+      relTemp.concat(":");
+  }
+  relTemp.toUpperCase();
+  Saddress[1] = relTemp;
 
   for (int i = 0; i < sizeof(address) / 6; i++){
     memcpy(peerInfo.peer_addr, address[i], 6);
@@ -207,12 +271,15 @@ void loop(){
     {
       case 2:
         timer = 0;
+        state = false;
         break;
       case 0:
         timer = millis();
         waiting = false;
+        state = false;
         break;
       default:
+        state = true;
         break;
     }
     retry = 3;
@@ -243,7 +310,6 @@ void loop(){
         break;
       }
     }
-    state = true;
   }
   else {
     if (!waiting){
@@ -252,6 +318,29 @@ void loop(){
       waiting = true;
     }
     else {
+      if (scanState){
+        ScanForSlave();
+        scanState = false;
+      }
+      else if (updateData){
+        monitor_debug.println("\n\r------------------------------------------------------");
+        monitor_debug.println("Use update command to set Sentinel and Relay addresses");
+        monitor_debug.println("Command structure:\n\r\"senX XX:XX:XX:XX:XX:XX\"\n or \n\r\"relX XX:XX:XX:XX:XX:XX\"");
+        monitor_debug.println("Use command \"done\" to finish");
+        monitor_debug.println("------------------------------------------------------");
+
+        WebSerial.println("\n------------------------------------------------------");
+        WebSerial.println("Use update command to set Sentinel and Relay addresses");
+        WebSerial.println("Command structure:\n\"senX XX:XX:XX:XX:XX:XX\"\n or \n\"relX XX:XX:XX:XX:XX:XX\"");
+        WebSerial.println("Use command \"done\" to finish");
+        WebSerial.println("------------------------------------------------------");
+        while(updateData){
+          if (scanState){
+            ScanForSlave();
+            scanState = false;
+          }
+        }
+      }
       monitor_debug.printf(".");
       WebSerial.print(".");
       delay(2500);
@@ -303,9 +392,15 @@ void ScanForSlave(){
       monitor_debug.printf("SSID: %s\n\r", WiFi.SSID(i).c_str());
       monitor_debug.printf("MAC:  %s\n\r", WiFi.BSSIDstr(i).c_str());
       monitor_debug.printf("RSSI: %d\n\r", WiFi.RSSI(i));
+
+      WebSerial.println("--------------------------------");
+      WebSerial.println("SSID: " + WiFi.SSID(i));
+      WebSerial.println("MAC:  " + WiFi.BSSIDstr(i));
+      WebSerial.println("RSSI: " + String(WiFi.RSSI(i)));
     }
   }
   monitor_debug.println("--------------------------------");
+  WebSerial.println("--------------------------------");
 }
 
 void modemConfigure(){
@@ -380,7 +475,6 @@ void modemConfigure(){
             input = "";
             break;
           }
-          // Reset for reuse
           input = "";
         } else {
             input += c;
@@ -398,7 +492,7 @@ void modemConfigure(){
 int modemConnect(){
   monitor_debug.println("\n\nWaiting for network...");
   WebSerial.println("Waiting for network...");
-  for (int i = 2; i > 0; i--){
+  for (int i = 3; i > 0; i--){
     if (!modem.waitForNetwork()){
       if(i == 1){
         monitor_debug.printf("Failed to connect, restarting ESP\n\r", i-1);
@@ -410,6 +504,69 @@ int modemConnect(){
           ESP.restart();
         modemConfigure();
         return 2;
+      }
+      modem.sendAT("+CGREG?");
+      if (modem.waitResponse(10000L, response) != 1){
+        response = "";
+        WebSerial.println("Connection refused, restarting modem");
+        netRetry++;
+        modemRestart();
+        delay(10000);
+        if (!modem.init())
+          ESP.restart();
+        modemConfigure();
+        return 2;
+      }
+      else {
+        response.replace(GSM_OK, "");
+        response.replace(GSM_NL, "");
+        if (strcmp(response.c_str(), "+CGREG: 0,2") != 0){
+          WebSerial.println("Connection refused, restarting modem");
+          netRetry++;
+          modemRestart();
+          delay(10000);
+          if (!modem.init())
+            ESP.restart();
+          modemConfigure();
+          return 2;
+        }
+        else {
+          response.replace(GSM_OK, "");
+          response.replace(GSM_NL, "");
+          WebSerial.println(response);
+          modem.sendAT("+CPSI?");
+          if(modem.waitResponse(1000L, response) != 1){
+            WebSerial.println("Connection refused, restarting modem");
+            netRetry++;
+            modemRestart();
+            delay(10000);
+            if (!modem.init())
+              ESP.restart();
+            modemConfigure();
+            return 2;
+          }
+          else {
+            response.replace(GSM_OK, "");
+            response.replace(GSM_NL, "");
+            WebSerial.println(response);
+          }
+          modem.sendAT("+COPS?");
+          if(modem.waitResponse(1000L, response) != 1){
+            WebSerial.println("Connection refused, restarting modem");
+            netRetry++;
+            modemRestart();
+            delay(10000);
+            if (!modem.init())
+              ESP.restart();
+            modemConfigure();
+            return 2;
+          }
+          else {
+            response.replace(GSM_OK, "");
+            response.replace(GSM_NL, "");
+            WebSerial.println(response);
+          }
+        }
       }
       monitor_debug.printf("Failed to connect, retrying %d times\n\r", i-1);
       WebSerial.print("Failed to connect, retrying ");
@@ -451,6 +608,8 @@ int modemConnect(){
         WebSerial.println("Failed to connect to GPRS");
       }
   }
+
+  response = "";
 
   String ccid = modem.getSimCCID();
   monitor_debug.println("CCID: " + ccid);
@@ -518,10 +677,10 @@ int modemConnect(){
     monitor_debug.printf("-------------------------\n\n\r");
 
     WebSerial.println("-------------------------");
-    WebSerial.println("  Mode:   " + String(networking[0]));
-    WebSerial.println("  Status: " + String(networking[1]));
+    WebSerial.println("  Mode:  " + String(networking[0]));
+    WebSerial.println("  Status:  " + String(networking[1]));
     WebSerial.println("  Band:   " + String(networking[6]));
-    WebSerial.println("  RSSI:   " + String(networking[12]));
+    WebSerial.println("  RSSI:    " + String(networking[12]));
     WebSerial.println("-------------------------");
   }
   return 1;
@@ -705,38 +864,157 @@ void recvMsg(uint8_t *data, size_t len){
   for(int i=0; i < len; i++){
     d += char(data[i]);
   }
-  if (strstr(d.c_str(), "Test 1") != NULL){
-    WebSerial.println("\rTesting Relay 1: " + Saddress[0]);
-    if(esp_now_send(address[0], (uint8_t *)&myData, sizeof(myData)) != ESP_OK)
-      WebSerial.println("Failed to reach: " + Saddress[0]);
+  d.toLowerCase();
+  if(updateData){
+    if (strstr(d.c_str(), "scan")){
+      WebSerial.println("Scanning for ");
+      scanState = true;
+    }
+    else if (strstr(d.c_str(), "clear")){
+      monitor_debug.println("Removing all key-value pairs");
+      WebSerial.println("Removing all key-value pairs");
+      prefs.clear();
+    }
+    else if (strstr(d.c_str(), "check")){
+
+    }
+    else if (strstr(d.c_str(), "done")){
+      monitor_debug.println("------------------------------------------------------");
+      WebSerial.println("------------------------------------------------------");
+      prefs.end();
+      updateData = false;
+    }  
+    else {
+      d.toUpperCase();
+      char dChar[50] = "";
+      if (d.length() > 5){
+        strcpy(dChar, d.c_str()+5);
+        if (strstr(d.c_str(), "SEN1")){
+          strcpy(sentinels[0], dChar);
+          Ssentinels[0] = d.substring(5);
+          prefs.putString("Sen1", Ssentinels[0]);
+          monitor_debug.println("Sentinel 1 updated to: " + Ssentinels[0]);
+          WebSerial.println("Sentinel 1 updated to:" + Ssentinels[0]);
+        }
+        else if (strstr(d.c_str(), "SEN2")){
+          strcpy(sentinels[1], dChar);
+          Ssentinels[1] = d.substring(5);
+          prefs.putString("Sen2", Ssentinels[1]);
+          monitor_debug.println("Sentinel 2 updated to: " + Ssentinels[1]);
+          WebSerial.println("Sentinel 2 updated to:" + Ssentinels[1]);
+        }
+        else if (strstr(d.c_str(), "REL1")){
+          Saddress[0] = d.substring(5);
+          char *updateToken = strtok(dChar, ":");
+          int updateTokenCount = 0;
+          while(updateToken != NULL){
+            address[0][updateTokenCount] = (int)strtol(updateToken, NULL, 16);
+            updateToken = strtok(NULL, ":");
+            updateTokenCount++;
+          }
+          monitor_debug.println("Relay 1 updated to: " + Saddress[0]);
+          WebSerial.println("Relay 1 updated to: " + Saddress[0]);
+          if (prefs.putBytes("Rel1", address[0], 6) == 6){
+            monitor_debug.println("Data stored succesfuly");
+            WebSerial.println("Data stored succesfuly");
+          }
+          memcpy(peerInfo.peer_addr, address[0], 6);
+          peerInfo.channel = 0;  
+          peerInfo.encrypt = false;
+          if (esp_now_add_peer(&peerInfo) == ESP_OK) {
+            monitor_debug.println("Successfuly added as a Peer");
+            WebSerial.println("Successfuly added as a Peer");
+          }
+          else {
+            monitor_debug.println("Failed to add as a Peer");
+            WebSerial.println("Failed to add as a Peer");
+          }
+        }
+        else if (strstr(d.c_str(), "REL2")){
+          Saddress[1] = d.substring(5);
+          char *updateToken = strtok(dChar, ":");
+          int updateTokenCount = 0;
+          while(updateToken != NULL){
+            address[1][updateTokenCount] = (int)strtol(updateToken, NULL, 16);
+            updateToken = strtok(NULL, ":");
+            updateTokenCount++;
+          }
+          monitor_debug.println("Relay 2 updated to: " + Saddress[1]);
+          WebSerial.println("Relay 2 updated to: " + Saddress[1]);
+          if (prefs.putBytes("Rel2", address[1], 6) == 6){
+            monitor_debug.println("Data stored succesfuly");
+            WebSerial.println("Data stored succesfuly");
+          }
+          memcpy(peerInfo.peer_addr, address[1], 6);
+          peerInfo.channel = 0;  
+          peerInfo.encrypt = false;
+          if (esp_now_add_peer(&peerInfo) == ESP_OK) {
+            monitor_debug.println("Successfuly added as a Peer");
+            WebSerial.println("Successfuly added as a Peer");
+          }
+          else {
+            monitor_debug.println("Failed to add as a Peer");
+            WebSerial.println("Failed to add as a Peer");
+          }
+        }
+        else {
+          WebSerial.println("Not a valid command\nUse senX XX:XX:XX:XX:XX:XX\nor  relX XX:XX:XX:XX:XX");
+          WebSerial.println(d.c_str());
+        }
+      }
+      else {
+        WebSerial.println("Not a valid command\nUse senX XX:XX:XX:XX:XX:XX\nor  relX XX:XX:XX:XX:XX");
+        WebSerial.println(d.c_str());
+      }
+    }
   }
-  else if (strstr(d.c_str(), "Test 2") != NULL){
-    WebSerial.println("\n\rTesting Relay 2: " + Saddress[1]);
-    if(esp_now_send(address[1], (uint8_t *)&myData, sizeof(myData)) != ESP_OK)
-      WebSerial.println("Failed to reach: " + Saddress[1]);
-  }
-  else if (strstr(d.c_str(), "Stats") != NULL) {
-    unsigned long uptime = millis();
-    unsigned long requestTimer = uptime - reqTime;
-    char *reqTimer = (char*)malloc(13 * sizeof(char)); // DDD:HH:MM:SS
-    char *upTimer  = (char*)malloc(13 * sizeof(char)); // DDD:HH:MM:SS
-    sprintf(reqTimer, "%03d:%02d:%02d:%02d", requestTimer / 86400000, (requestTimer / 3600000) % 24, (requestTimer / 60000) % 60, (requestTimer / 1000) % 60);
-    sprintf(upTimer, "%03d:%02d:%02d:%02d", uptime / 86400000, (uptime / 3600000) % 24, (uptime / 60000) % 60, (uptime / 1000) % 60);
-    WebSerial.println("\r\n--------------------------------");
-    WebSerial.println("Relay 1:   " + Saddress[0]);
-    WebSerial.println("Sentinel: " + Ssentinels[0]);
-    WebSerial.println("--------------------------------");
-    WebSerial.println("Relay 2:  " + Saddress[1]);
-    WebSerial.println("Sentinel: " + Ssentinels[1]);
-    WebSerial.println("--------------------------------");
-    WebSerial.println("Number of IP's:   " + String(ipnum));
-    WebSerial.println("Reconnects:        " + String(netRetry));
-    WebSerial.println("Total Requests:    " + String(requestNum));
-    WebSerial.println("Request Resets:   " + String(reqReset));
-    WebSerial.println("Req Time:           " + String(reqTimer));
-    WebSerial.println("Uptime:              " + String(upTimer));
-    WebSerial.println("--------------------------------");
-    free(reqTimer);
-    free(upTimer);
+  else {
+    if (strstr(d.c_str(), "test 1") != NULL){
+      WebSerial.println("\rTesting Relay 1: " + Saddress[0]);
+      if(esp_now_send(address[0], (uint8_t *)&myData, sizeof(myData)) != ESP_OK)
+        WebSerial.println("Failed to reach: " + Saddress[0]);
+    }
+    else if (strstr(d.c_str(), "test 2") != NULL){
+      WebSerial.println("\n\rTesting Relay 2: " + Saddress[1]);
+      if(esp_now_send(address[1], (uint8_t *)&myData, sizeof(myData)) != ESP_OK)
+        WebSerial.println("Failed to reach: " + Saddress[1]);
+    }
+    else if (strstr(d.c_str(), "stats") != NULL) {
+      unsigned long uptime = millis();
+      unsigned long requestTimer = uptime - reqTime;
+      char *reqTimer = (char*)malloc(13 * sizeof(char)); // DDD:HH:MM:SS
+      char *upTimer  = (char*)malloc(13 * sizeof(char)); // DDD:HH:MM:SS
+      sprintf(reqTimer, "%03d:%02d:%02d:%02d", requestTimer / 86400000, (requestTimer / 3600000) % 24, (requestTimer / 60000) % 60, (requestTimer / 1000) % 60);
+      sprintf(upTimer, "%03d:%02d:%02d:%02d", uptime / 86400000, (uptime / 3600000) % 24, (uptime / 60000) % 60, (uptime / 1000) % 60);
+      WebSerial.println("\r\n--------------------------------");
+      WebSerial.println("Relay 1:   " + Saddress[0]);
+      WebSerial.println("Sentinel: " + Ssentinels[0]);
+      WebSerial.println("--------------------------------");
+      WebSerial.println("Relay 2:  " + Saddress[1]);
+      WebSerial.println("Sentinel: " + Ssentinels[1]);
+      WebSerial.println("--------------------------------");
+      WebSerial.println("Number of IP's:   " + String(ipnum));
+      WebSerial.println("Reconnects:        " + String(netRetry));
+      WebSerial.println("Total Requests:    " + String(requestNum));
+      WebSerial.println("Request Resets:   " + String(reqReset));
+      WebSerial.println("Req Time:           " + String(reqTimer));
+      WebSerial.println("Uptime:              " + String(upTimer));
+      WebSerial.println("--------------------------------");
+      free(reqTimer);
+      free(upTimer);
+    }
+    else if (strstr(d.c_str(), "scan")){
+      monitor_debug.println("\n\rScanning for slaves on the next loop");
+      WebSerial.println("\nScanning for slaves on next loop");
+      scanState = true;
+    }
+    else if (strstr(d.c_str(), "update")){
+      updateData = true;
+      prefs.begin("Data", false);
+    }
+    else {
+      WebSerial.println("Not a valid command");
+      WebSerial.println(d.c_str());
+    }
   }
 }
