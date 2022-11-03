@@ -55,6 +55,14 @@ int netRetry = 0;
 int requestNum = 0;
 int reqReset = 0;
 
+char watching[][20] = {"A8:03:2A:74:BF:B8", "24:6F:28:D1:3B:5C",    //Southdown Entrance
+                       "24:6F:28:D0:6F:F0", "24:6F:28:D0:5A:94",    //Metrobox 
+                       "9C:9C:1F:18:78:5C", "24:6F:28:45:E7:04",    //Mainfreight Southdown
+                       "9C:9C:1F:18:76:AC", "24:6F:28:D1:30:F4"};   //Toll
+
+uint8_t resets[] = {0, 0, 0, 0, 0, 0, 0, 0};
+uint8_t prev[]   = {0, 0, 0, 0, 0, 0, 0, 0};
+
 uint8_t address[][6] = {{0, 0, 0, 0, 0, 0},   //A1
                         {0, 0, 0, 0, 0, 1},   //A2
                         {0, 0, 0, 0, 0, 2}};  //SELF
@@ -810,31 +818,18 @@ int httpRequest(){
 }
 
 void resetRelay(){
-  const char* cResponse = response.c_str();
-  for (int i = 0; i < sizeof(sentinels)/sizeof(sentinels[0]); ++i){
-    if (strstr(cResponse, sentinels[i]) !=NULL){
-      monitor_debug.printf("Sentinel %s offline, attempting to restart.\n\r", sentinels[i]);
-      WebSerial.println("Sentinel "+String(sentinels[i])+" offline, attempting to restart.");
-      monitor_debug.printf("Sending packet to %02X:%02X:%02X:%02X:%02X:%02X\n\r", address[i][0], address[i][1], address[i][2], address[i][3], address[i][4], address[i][5]);
-      WebSerial.println("Sending packet to "+ Saddress[i]);
-      for (int j = 5; j > 0; j--){
-        if (esp_now_send(address[i], (uint8_t *)&myData, sizeof(myData)) != ESP_OK){
-          monitor_debug.printf("Failed. Retrying %d\n\r", j);
-          WebSerial.println("Failed. Retrying " + j);
-          delay(200);
-          continue;
-        }
-        else {
-          delay(100);
-          if (sendStatus){
-            break;
-          }
-          else {
-            continue;
-          }
-        }
+  const char *cResponse = response.c_str();
+  for (int i = 0; i < sizeof(watching) / sizeof(watching[0]); i++){
+    if (strstr(cResponse, watching[i]) != NULL){
+      if (prev[i] == 0){
+        prev[i] = 1;
+        resets[i]++;
       }
-      delay(1000);
+    }
+    else {
+      if (prev[i] == 1){
+        prev[i] = 0;
+      }
     }
   }
   response = "";
