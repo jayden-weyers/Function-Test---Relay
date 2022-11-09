@@ -55,13 +55,13 @@ int netRetry = 0;
 int requestNum = 0;
 int reqReset = 0;
 
-char watching[][20] = {"A8:03:2A:74:BF:B8", "24:6F:28:D1:3B:5C",    //Southdown Entrance
-                       "24:6F:28:D0:6F:F0", "24:6F:28:D0:5A:94",    //Metrobox 
-                       "9C:9C:1F:18:78:5C", "24:6F:28:45:E7:04",    //Mainfreight Southdown
-                       "9C:9C:1F:18:76:AC", "24:6F:28:D1:30:F4"};   //Toll
+const char watching[][20] = {"A8:03:2A:74:BF:B8", "24:6F:28:D1:3B:5C",    //Southdown Entrance
+                             "24:6F:28:D0:6F:F0", "24:6F:28:D0:5A:94",    //Metrobox 
+                             "9C:9C:1F:18:78:5C", "24:6F:28:45:E7:04",    //Mainfreight Southdown
+                             "9C:9C:1F:18:76:AC", "24:6F:28:D1:30:F4"};   //Toll
 
-uint8_t resets[] = {0, 0, 0, 0, 0, 0, 0, 0};
-uint8_t prev[]   = {0, 0, 0, 0, 0, 0, 0, 0};
+int resets[] = {0, 0, 0, 0, 0, 0, 0, 0};
+int prev[]   = {0, 0, 0, 0, 0, 0, 0, 0};
 
 uint8_t address[][6] = {{0, 0, 0, 0, 0, 0},   //A1
                         {0, 0, 0, 0, 0, 1},   //A2
@@ -188,6 +188,24 @@ void setup(){
   }
   else {
     prefs.putBytes("Rel2", address[1], 6);
+  }
+
+  bufferTest = prefs.getBytesLength("Resets");
+  monitor_debug.printf("\n\rResets buffer length: %d\n\r", bufferTest);
+  if (bufferTest != 0){
+    prefs.getBytes("Resets", resets, 8);
+  }
+  else {
+    prefs.putBytes("Resets", resets, 8);
+  }
+
+  bufferTest = prefs.getBytesLength("Prev");
+  monitor_debug.printf("\n\rPrevious buffer length: %d\n\r", bufferTest);
+  if (bufferTest != 0){
+    prefs.getBytes("Prev", prev, 8);
+  }
+  else {
+    prefs.putBytes("Prev", prev, 8);
   }
 
   prefs.end();
@@ -776,7 +794,7 @@ int httpRequest(){
           resTokenCount++;
         }
         if (strcmp(reqResponse[1], "200") == 0){
-          if (strcmp(reqResponse[2], "1") != 0)
+          if (atoi(reqResponse[2]) > 1)
             reqReset++;
           requestNum++;
           reqTime = millis();
@@ -819,7 +837,9 @@ int httpRequest(){
 
 void resetRelay(){
   const char *cResponse = response.c_str();
-  for (int i = 0; i < sizeof(watching) / sizeof(watching[0]); i++){
+  WebSerial.print(cResponse);
+  prefs.begin("Data", false);
+  for (int i = 0; i < 8; i++){
     if (strstr(cResponse, watching[i]) != NULL){
       if (prev[i] == 0){
         prev[i] = 1;
@@ -832,6 +852,9 @@ void resetRelay(){
       }
     }
   }
+  prefs.putBytes("Resets", resets, 8);
+  prefs.putBytes("Prev", prev, 8);
+  prefs.end();
   response = "";
 }
 
@@ -1006,6 +1029,32 @@ void recvMsg(uint8_t *data, size_t len){
     else if (strstr(d.c_str(), "update")){
       updateData = true;
       prefs.begin("Data", false);
+    }
+    else if (strstr(d.c_str(), "resets")){
+      String colon = " : ";
+      monitor_debug.println("\n\r------------------------------");
+      monitor_debug.println("Reset Info:");
+      monitor_debug.println(watching[0] + colon + resets[0]);
+      monitor_debug.println(watching[1] + colon + resets[1]);
+      monitor_debug.println(watching[2] + colon + resets[2]);
+      monitor_debug.println(watching[3] + colon + resets[3]);
+      monitor_debug.println(watching[4] + colon + resets[4]);
+      monitor_debug.println(watching[5] + colon + resets[5]);
+      monitor_debug.println(watching[6] + colon + resets[6]);
+      monitor_debug.println(watching[7] + colon + resets[7]);
+      monitor_debug.println("------------------------------");
+
+      WebSerial.println("\n\r------------------------------");
+      WebSerial.println("Reset Info:");
+      WebSerial.println(watching[0] + colon + resets[0]);
+      WebSerial.println(watching[1] + colon + resets[1]);
+      WebSerial.println(watching[2] + colon + resets[2]);
+      WebSerial.println(watching[3] + colon + resets[3]);
+      WebSerial.println(watching[4] + colon + resets[4]);
+      WebSerial.println(watching[5] + colon + resets[5]);
+      WebSerial.println(watching[6] + colon + resets[6]);
+      WebSerial.println(watching[7] + colon + resets[7]);
+      WebSerial.println("------------------------------");
     }
     else {
       WebSerial.println("Not a valid command");
